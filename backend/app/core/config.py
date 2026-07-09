@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pydantic import Field
-from pydantic import BaseSettings
-from pydantic import SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
 class Setting(BaseSettings):
     # Application configuration loaded from environment variable
     APP_NAME: str = "CA Mentor AI"

@@ -35,14 +35,14 @@ logger.add(
     retention="30 days",
     compression="zip",
     enqueue=True,
-    backtrack=True,
+    backtrace=True,
     diagnose=True,
-    encoding="ütf-8",
+    encoding="utf-8",
     format=(
-        "{time:YYYY-MM-DD HH:mm:ss} |"
-        "{level:<8} |"
-        "{name}:{function}:{line} |"
+        "{time:YYYY-MM-DD HH:mm:ss} | "
+        "{level: <8} | "
+        "{name}:{function}:{line} | "
         "{message}"
     ),
-
 )
+
