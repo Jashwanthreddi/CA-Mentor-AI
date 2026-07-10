@@ -30,7 +30,7 @@ def register_exception_handlers(app:FastAPI) ->None:
             errors=exc.details,
         )
     
-    @app.exeception_handler(RequestValidationError)
+    @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(
         request:Request,
         exc:RequestValidationError,

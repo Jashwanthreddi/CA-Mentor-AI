@@ -2,13 +2,13 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-class Setting(BaseSettings):
+class Settings(BaseSettings):
     # Application configuration loaded from environment variable
     APP_NAME: str = "CA Mentor AI"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = True
 
-    Host: str = "0.0.0.0"
+    HOST: str = "0.0.0.0"
     PORT: int = 8000
 
     # API
@@ -34,8 +34,8 @@ class Setting(BaseSettings):
         extra = "ignore"
 
 @lru_cache()
-def get_settings() -> Setting:
+def get_settings() -> Settings:
     # return the cached settings instance
-    return Setting()
+    return Settings()
 
 settings = get_settings()

@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.core import logger
 from app.core.responses import success_response
+from app.services.health_service import HealthService
 
 
 router=APIRouter()
@@ -16,10 +17,6 @@ async def health_check():
     logger.info("Health endpoint accessed")
     return success_response(
         message="Application is running",
-        data={
-            "application":"CA Mentor AI",
-            "version":"1.0.0",
-            "status_code":"running",
-        },
+        data=HealthService.get_health_statud(),
     )
 
