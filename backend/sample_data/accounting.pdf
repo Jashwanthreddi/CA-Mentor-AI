@@ -1,0 +1,7 @@
+from pathlib import Path
+
+pdf_path = Path("C:\Users\JASHWANTHREDDY\Downloads\accounting_unit1.pdf").parent.parent / "sample_data" / "accounting.pdf"
+
+print(pdf_path.resolve())
+
+result = converter.convert(pdf_path)
