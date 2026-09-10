@@ -25,192 +25,284 @@ Chunks
     ↓
 Embeddings
 """
-from __future__ import annotations # allow forward references
+"""
+Core domain models for the CA Mentor AI ingestion pipeline.
+
+These models represent the educational meaning of extracted
+content after it has crossed the raw-document boundary.
+"""
+
+from __future__ import annotations
 
 from enum import Enum
-from typing import Any
 
 from pydantic import BaseModel, Field
 
-# enums
 
-class DocumentLevel(str,Enum):
-    FOUNDATION="foundation"
-    INTERMEDIATE="intermediate"
-    FINAL="final"
+class DocumentLevel(str, Enum):
+    """Academic level of the source document."""
 
-class SectionLevel(str,Enum):
-    PAPER="paper"
-    MODULE="module"
-    CHAPTER="chapter"
-    UNIT="unit"
-    TOPIC="topic"
-    SUBTOPIC="subtopic"
+    FOUNDATION = "foundation"
+    INTERMEDIATE = "intermediate"
+    FINAL = "final"
 
-class EducationalType(str,Enum):
-    CONCEPT="concept"
-    DEFINITION="definition"
-    PROCEDURE="procedure"
-    FORMULA="formula"
-    WORKED_EXAMPLE="worked_example"
-    ILLUSTRATION="illustration"
-    PRACTICE_QUESTION="practice_question"
-    EXAM_QUESTION="exam_question"
-    MEMORY_TRICK="memory_trick"
-    SUMMARY="summary"
-    TABLE="table"
-    DIAGRAM="diagram"
-    FLOWCHART="flowchart"
-    CASE_STUDY="case_study"
-    EXCEPTION="exception"
-    RULE="rule"
-    IMPORTANT_POINT="important_point"
-    LEARNING_OUTCOME="learning_outcome"
 
-class DifficultyLevel(str,Enum):
-    BEGINNER="beginner"
-    INTERMEDIATE="intermediate"
-    ADVANCE="advance"
+class SectionLevel(str, Enum):
+    """Hierarchical level of the source material."""
 
-class TeachingPriority(str,Enum):
-    HIGH="high"
-    MEDIUM="medium"
-    LOW="low"
+    PAPER = "paper"
+    MODULE = "module"
+    CHAPTER = "chapter"
+    UNIT = "unit"
+    TOPIC = "topic"
+    SUBTOPIC = "subtopic"
 
-class EmbeddingStrategy(str,Enum):
-    None="none"
-    FULL="full"
-    SUMMARY_ONLY="summary_only"
-    TABLE_ONLY="table_only"
-    IMAGE_ONLY="image_only"
 
-class RelationshipType(str,Enum):
-    RELATED="related"
-    PREREQUISITE="prerequisite"
-    DEPENDS_ON="depends_on"
-    EXAMPLE_OF="eample_of"
-    CONTINUATION_OF="continuation_of"
+class EducationalType(str, Enum):
+    """Educational role of a knowledge unit."""
 
-# metadata models
+    CONCEPT = "concept"
+    DEFINITION = "definition"
+    PROCEDURE = "procedure"
+    FORMULA = "formula"
+    WORKED_EXAMPLE = "worked_example"
+    ILLUSTRATION = "illustration"
+
+    PRACTICE_QUESTION = "practice_question"
+    EXAM_QUESTION = "exam_question"
+
+    MEMORY_TRICK = "memory_trick"
+    SUMMARY = "summary"
+
+    TABLE = "table"
+    DIAGRAM = "diagram"
+    FLOWCHART = "flowchart"
+
+    CASE_STUDY = "case_study"
+
+    EXCEPTION = "exception"
+    RULE = "rule"
+    IMPORTANT_POINT = "important_point"
+    LEARNING_OUTCOME = "learning_outcome"
+
+
+class DifficultyLevel(str, Enum):
+    """Estimated learning difficulty."""
+
+    BEGINNER = "beginner"
+    INTERMEDIATE = "intermediate"
+    ADVANCED = "advanced"
+
+
+class TeachingPriority(str, Enum):
+    """Priority of the content for teaching and retrieval."""
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class EmbeddingStrategy(str, Enum):
+    """Controls how a knowledge unit is represented for retrieval."""
+
+    NONE = "none"
+    FULL = "full"
+    SUMMARY_ONLY = "summary_only"
+    TABLE_ONLY = "table_only"
+    IMAGE_ONLY = "image_only"
+
+
+class RelationshipType(str, Enum):
+    """Relationship between educational knowledge units."""
+
+    RELATED = "related"
+    PREREQUISITE = "prerequisite"
+    DEPENDS_ON = "depends_on"
+    EXAMPLE_OF = "example_of"
+    CONTINUATION_OF = "continuation_of"
+
+
 class DocumentMetadata(BaseModel):
-    #metadata describing the complete source document
-    filename:str
-    title:str
-    source:str
-    edition:str
-    language:str="English"
+    """Metadata describing the source document."""
 
-    level:DocumentLevel
-    paper:str
+    document_id: str
+    filename: str
+    title: str
 
-    total_pages:int=0
+    source: str
+    edition: str
+
+    language: str = "English"
+
+    level: DocumentLevel
+    paper: str
+
+    total_pages: int = 0
 
 
 class RelationshipMetadata(BaseModel):
-    # relationship together with every chunk
+    """Relationship between two educational knowledge units."""
 
-    relationship:RelationshipType
-    target_id:str
+    relationship: RelationshipType
+    target_id: str
 
 
 class ChunkMetadata(BaseModel):
-    # metadata stored together with every chunk
-    level:DocumentLevel
-    paper:str
-    module:str|None =None
-    chapter :str | None=None
-    unit:str|None=None
-    topic:str |None=None
-    subtopic :str |None=None
+    """Metadata attached to retrieval chunks."""
+
+    level: DocumentLevel
+    paper: str
+
+    module: str | None = None
+    chapter: str | None = None
+    unit: str | None = None
+    topic: str | None = None
+    subtopic: str | None = None
+
     educational_type: EducationalType
-    difficulty:DifficultyLevel=DifficultyLevel.BEGINNER
-    teaching_priority:TeachingPriority=TeachingPriority.HIGH
-    embedding_strategy: EmbeddingStrategy=EmbeddingStrategy.FULL
-    page_start:int
-    page_end:int
-    has_table:bool=False
-    has_image:bool=False
-    has_formula:bool=False
-    has_example:bool=False
-    version:str
+
+    difficulty: DifficultyLevel = DifficultyLevel.BEGINNER
+
+    teaching_priority: TeachingPriority = TeachingPriority.HIGH
+
+    embedding_strategy: EmbeddingStrategy = EmbeddingStrategy.FULL
+
+    page_start: int
+    page_end: int
+
+    has_table: bool = False
+    has_image: bool = False
+    has_formula: bool = False
+    has_example: bool = False
+
+    version: str
 
 
 class TableMetadata(BaseModel):
-    title:str  |None=None
-    row:int=0
-    columns:int=0
+    """Metadata describing a table associated with a knowledge unit."""
+
+    title: str | None = None
+    rows: int = 0
+    columns: int = 0
 
 
 class ImageMetadata(BaseModel):
-    caption:str |None=None
-    image_type:str |None=None
+    """Metadata describing an image or diagram."""
+
+    caption: str | None = None
+    image_type: str | None = None
 
 
-# Core Document models
+class EducationalElement(BaseModel):
+    """
+    Classified educational element produced by the classifier.
 
-class PDFDocument(BaseModel):
-    # represents one educational documents.
-    metadata:DocumentMetadata
-    sections:list["DocumentSection"]=Field(default_factory=list)
+    This is an intermediate representation between the raw PDF
+    representation and the final educational knowledge unit.
+    """
 
-class DocumentSection(BaseModel):
-    #represents document hierarchy
-    id :str
-    title:str
-    level:SectionLevel
-    page_start:int
-    page_end:int
-    content:str=""
-    children:list["DocumentSection"]=Field(default_factory=list)
+    id: str
+
+    educational_type: EducationalType
+
+    content: str
+
+    page_start: int
+    page_end: int
+
+    hierarchy_path: list[str] = Field(default_factory=list)
+
+    source_block_ids: list[str] = Field(default_factory=list)
+
+    confidence: float | None = None
+
+    metadata: dict[str, str] = Field(default_factory=dict)
+
 
 class EducationalKnowledgeUnit(BaseModel):
-    # smallest complete educational object
-    id:str
-    title:str
-    educational_type:EducationalType
-    content:str
-    metadata:ChunkMetadata
-    hierarchy_path:list[str]
-    relationships:list[RelationshipMetadata]=Field(default_factory=list)
-    tables:list[TableMetadata]=Field(default_factory=list)
-    images:list[ImageMetadata]=Field(default_factory=list)
+    """
+    Semantically meaningful educational unit.
+
+    A knowledge unit should represent a coherent piece of
+    educational information rather than an arbitrary text window.
+    """
+
+    id: str
+
+    title: str
+
+    educational_type: EducationalType
+
+    content: str
+
+    metadata: ChunkMetadata
+
+    hierarchy_path: list[str] = Field(default_factory=list)
+
+    relationships: list[RelationshipMetadata] = Field(
+        default_factory=list
+    )
+
+    tables: list[TableMetadata] = Field(
+        default_factory=list
+    )
+
+    images: list[ImageMetadata] = Field(
+        default_factory=list
+    )
 
 
-class ChunkCandiate(BaseModel):
-    # intermediate object before chunk generation
-    eku_id:str
-    text:str
-    metadata:ChunkMetadata
+class ChunkCandidate(BaseModel):
+    """Intermediate candidate before final chunk validation."""
+
+    eku_id: str
+
+    text: str
+
+    metadata: ChunkMetadata
 
 
 class DocumentChunk(BaseModel):
-    #smallest retrievable knowledge unit.
-    chunk_id:str
-    eku_id:str
-    text:str
-    metadata:ChunkMetadata
+    """Final retrieval unit before embedding."""
+
+    chunk_id: str
+
+    eku_id: str
+
+    text: str
+
+    metadata: ChunkMetadata
 
 
 class EmbeddedChunk(DocumentChunk):
-    # documnet chunk with embedding
-    embedding:list[float]
+    """Retrieval chunk with its embedding vector."""
 
-    #--------------------------------
-    # ingestion report
-    #------------------------------
+    embedding: list[float]
 
 
 class IngestionReport(BaseModel):
-    filename:str
-    total_pages:int
-    section:int
-    eku_count:int
-    chunks:int
-    tables:int
-    images:int
-    embedding_time:float
-    upload_time:float
-    warnings:list[str] =Field(default_factory=list)
-    success:bool=True
+    """Summary of one ingestion execution."""
 
-    
+    filename: str
+
+    total_pages: int
+
+    sections: int
+
+    eku_count: int
+
+    chunks: int
+
+    tables: int
+
+    images: int
+
+    embedding_time: float
+
+    upload_time: float
+
+    warnings: list[str] = Field(
+        default_factory=list
+    )
+
+    success: bool = True
