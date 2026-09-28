@@ -1,0 +1,859 @@
+"""
+Tests for the Semantic Chunker.
+
+The tests verify that the chunker:
+
+1. Handles empty input.
+2. Keeps small EKUs intact.
+3. Splits large EKUs.
+4. Prefers paragraph boundaries.
+5. Falls back to sentence boundaries.
+6. Falls back to word boundaries for extremely long sentences.
+7. Preserves EKU provenance.
+8. Preserves metadata.
+9. Generates unique chunk IDs.
+10. Tracks chunk indexes.
+11. Tracks total chunk count.
+12. Records token counts.
+13. Keeps learning outcomes atomic.
+14. Keeps practice questions atomic.
+15. Keeps exam questions atomic.
+16. Keeps formulas atomic.
+17. Applies overlap to split content.
+18. Respects maximum chunk size.
+19. Preserves hierarchy and page metadata.
+"""
+
+
+from app.ingestion.chunker import SemanticChunker
+from app.ingestion.models import (
+    ChunkMetadata,
+    DifficultyLevel,
+    DocumentLevel,
+    EducationalKnowledgeUnit,
+    EducationalType,
+    EmbeddingStrategy,
+    TeachingPriority,
+)
+
+
+# ============================================================
+# TEST HELPERS
+# ============================================================
+
+
+def make_metadata(
+    *,
+    educational_type: EducationalType = EducationalType.CONCEPT,
+    page_start: int = 1,
+    page_end: int = 1,
+) -> ChunkMetadata:
+    """Create standard test metadata."""
+
+    return ChunkMetadata(
+        level=DocumentLevel.FOUNDATION,
+        paper="Paper 1",
+        module="Module 1",
+        chapter="Chapter 1",
+        unit="Unit 1",
+        topic="1.1 Introduction",
+        subtopic=None,
+        educational_type=educational_type,
+        difficulty=DifficultyLevel.BEGINNER,
+        teaching_priority=TeachingPriority.HIGH,
+        embedding_strategy=EmbeddingStrategy.FULL,
+        page_start=page_start,
+        page_end=page_end,
+        has_table=False,
+        has_image=False,
+        has_formula=(
+            educational_type == EducationalType.FORMULA
+        ),
+        has_example=(
+            educational_type
+            in {
+                EducationalType.ILLUSTRATION,
+                EducationalType.WORKED_EXAMPLE,
+            }
+        ),
+        version="parser-v1",
+    )
+
+
+def make_eku(
+    *,
+    eku_id: str = "eku-test-1",
+    title: str = "Test Concept",
+    content: str = "Accounting is the systematic recording of transactions.",
+    educational_type: EducationalType = EducationalType.CONCEPT,
+    page_start: int = 1,
+    page_end: int = 1,
+) -> EducationalKnowledgeUnit:
+    """Create a standard test EKU."""
+
+    return EducationalKnowledgeUnit(
+        id=eku_id,
+        title=title,
+        educational_type=educational_type,
+        content=content,
+        metadata=make_metadata(
+            educational_type=educational_type,
+            page_start=page_start,
+            page_end=page_end,
+        ),
+        hierarchy_path=[
+            "Chapter 1",
+            "Unit 1",
+            "1.1 Introduction",
+        ],
+        source_element_ids=[
+            f"element-{eku_id}"
+        ],
+    )
+
+
+# ============================================================
+# EMPTY INPUT
+# ============================================================
+
+
+def test_empty_input_returns_empty_list() -> None:
+    """Empty EKU input should produce no chunks."""
+
+    chunker = SemanticChunker()
+
+    result = chunker.chunk([])
+
+    assert result == []
+
+
+# ============================================================
+# SMALL EKU
+# ============================================================
+
+
+def test_small_eku_remains_intact() -> None:
+    """
+    An EKU below the maximum size should remain one chunk.
+    """
+
+    chunker = SemanticChunker(
+        target_tokens=20,
+        max_tokens=30,
+        overlap_tokens=0,
+    )
+
+    eku = make_eku(
+        content=(
+            "Accounting is the systematic recording "
+            "of financial transactions."
+        )
+    )
+
+    result = chunker.chunk([eku])
+
+    assert len(result) == 1
+
+    chunk = result[0]
+
+    assert chunk.eku_id == eku.id
+    assert chunk.text == eku.content
+    assert chunk.chunk_index == 0
+    assert chunk.total_chunks == 1
+
+
+# ============================================================
+# LARGE EKU
+# ============================================================
+
+
+def test_large_eku_is_split_into_multiple_chunks() -> None:
+    """A large EKU should produce multiple chunks."""
+
+    chunker = SemanticChunker(
+        target_tokens=20,
+        max_tokens=30,
+        overlap_tokens=0,
+    )
+
+    eku = make_eku(
+        content=(
+            "Accounting records financial transactions "
+            "systematically and communicates useful information.\n\n"
+            "Financial accounting focuses on preparing information "
+            "for external users of financial statements.\n\n"
+            "Management accounting provides information to internal "
+            "users for planning and decision making.\n\n"
+            "The information generated by accounting supports "
+            "economic and business decisions."
+        )
+    )
+
+    result = chunker.chunk([eku])
+
+    assert len(result) > 1
+
+    assert all(
+        chunk.eku_id == eku.id
+        for chunk in result
+    )
+
+
+# ============================================================
+# PARAGRAPH BOUNDARY
+# ============================================================
+
+
+def test_chunker_prefers_paragraph_boundaries() -> None:
+    """
+    Chunks should preferably split between paragraphs rather
+    than through the middle of a paragraph.
+    """
+
+    chunker = SemanticChunker(
+        target_tokens=15,
+        max_tokens=20,
+        overlap_tokens=0,
+    )
+
+    paragraph_one = (
+        "Accounting records business transactions "
+        "in a systematic manner."
+    )
+
+    paragraph_two = (
+        "Financial accounting prepares information "
+        "for external users."
+    )
+
+    paragraph_three = (
+        "Management accounting supports internal "
+        "planning and decision making."
+    )
+
+    eku = make_eku(
+        content=(
+            f"{paragraph_one}\n\n"
+            f"{paragraph_two}\n\n"
+            f"{paragraph_three}"
+        )
+    )
+
+    result = chunker.chunk([eku])
+
+    assert len(result) >= 2
+
+    # Every original paragraph should remain intact
+    # somewhere in the output.
+    combined = "\n\n".join(
+        chunk.text
+        for chunk in result
+    )
+
+    assert paragraph_one in combined
+    assert paragraph_two in combined
+    assert paragraph_three in combined
+
+
+# ============================================================
+# SENTENCE FALLBACK
+# ============================================================
+
+
+def test_chunker_falls_back_to_sentence_boundaries() -> None:
+    """
+    When a paragraph exceeds the maximum size, the chunker
+    should fall back to sentence boundaries.
+    """
+
+    chunker = SemanticChunker(
+        target_tokens=12,
+        max_tokens=18,
+        overlap_tokens=0,
+    )
+
+    paragraph = (
+        "Accounting records financial transactions carefully. "
+        "These transactions are classified according to their nature. "
+        "The information is then summarised for reporting purposes."
+    )
+
+    eku = make_eku(
+        content=paragraph
+    )
+
+    result = chunker.chunk([eku])
+
+    assert len(result) > 1
+
+    combined = " ".join(
+        chunk.text
+        for chunk in result
+    )
+
+    assert "Accounting records financial transactions carefully." in combined
+    assert "These transactions are classified according to their nature." in combined
+    assert "The information is then summarised for reporting purposes." in combined
+
+
+# ============================================================
+# WORD FALLBACK
+# ============================================================
+
+
+def test_chunker_falls_back_to_words_for_extremely_long_sentence() -> None:
+    """
+    A sentence larger than max_tokens should eventually be
+    split at word boundaries.
+    """
+
+    chunker = SemanticChunker(
+        target_tokens=10,
+        max_tokens=15,
+        overlap_tokens=0,
+    )
+
+    long_sentence = " ".join(
+        [
+            "Accounting",
+            "is",
+            "a",
+            "systematic",
+            "process",
+            "used",
+            "to",
+            "identify",
+            "measure",
+            "record",
+            "classify",
+            "summarise",
+            "and",
+            "communicate",
+            "financial",
+            "information",
+            "to",
+            "users",
+            "for",
+            "decision",
+            "making",
+            "purposes",
+        ]
+    )
+
+    eku = make_eku(
+        content=long_sentence
+    )
+
+    result = chunker.chunk([eku])
+
+    assert len(result) > 1
+
+    assert all(
+        chunk.token_count
+        <= chunker.max_tokens
+        for chunk in result
+    )
+
+
+# ============================================================
+# PROVENANCE
+# ============================================================
+
+
+def test_eku_id_is_preserved() -> None:
+    """Every chunk must retain its parent EKU ID."""
+
+    chunker = SemanticChunker(
+        target_tokens=10,
+        max_tokens=15,
+        overlap_tokens=0,
+    )
+
+    eku = make_eku(
+        eku_id="eku-provenance-test",
+        content=(
+        "Accounting records business transactions systematically "
+        "and maintains proper financial information for the organisation.\n\n"
+        "Accounting classifies transactions according to their nature "
+        "and records them under appropriate accounting heads.\n\n"
+        "Accounting summarises financial information so that users "
+        "can understand the financial position of the organisation."
+),
+    )
+
+    result = chunker.chunk([eku])
+
+    assert len(result) > 1
+
+    assert all(
+        chunk.eku_id == "eku-provenance-test"
+        for chunk in result
+    )
+
+
+# ============================================================
+# METADATA
+# ============================================================
+
+
+def test_chunk_metadata_is_preserved() -> None:
+    """Chunk metadata should be inherited from the EKU."""
+
+    chunker = SemanticChunker()
+
+    eku = make_eku(
+        page_start=5,
+        page_end=7,
+    )
+
+    result = chunker.chunk([eku])
+
+    assert len(result) == 1
+
+    metadata = result[0].metadata
+
+    assert metadata.level == DocumentLevel.FOUNDATION
+    assert metadata.paper == "Paper 1"
+    assert metadata.module == "Module 1"
+    assert metadata.chapter == "Chapter 1"
+    assert metadata.unit == "Unit 1"
+    assert metadata.topic == "1.1 Introduction"
+
+    assert metadata.page_start == 5
+    assert metadata.page_end == 7
+
+
+# ============================================================
+# UNIQUE CHUNK IDS
+# ============================================================
+
+
+def test_chunk_ids_are_unique() -> None:
+    """Every generated chunk ID must be unique."""
+
+    chunker = SemanticChunker(
+        target_tokens=10,
+        max_tokens=15,
+        overlap_tokens=0,
+    )
+
+    eku = make_eku(
+        content=(
+            "First accounting paragraph.\n\n"
+            "Second accounting paragraph.\n\n"
+            "Third accounting paragraph.\n\n"
+            "Fourth accounting paragraph."
+        )
+    )
+
+    result = chunker.chunk([eku])
+
+    ids = [
+        chunk.chunk_id
+        for chunk in result
+    ]
+
+    assert len(ids) > 1
+    assert len(ids) == len(set(ids))
+
+    assert all(
+        chunk_id.startswith("chunk-")
+        for chunk_id in ids
+    )
+
+
+# ============================================================
+# CHUNK INDEX
+# ============================================================
+
+
+def test_chunk_indexes_are_sequential() -> None:
+    """Chunk indexes should start at zero and increase sequentially."""
+
+    chunker = SemanticChunker(
+        target_tokens=10,
+        max_tokens=15,
+        overlap_tokens=0,
+    )
+
+    eku = make_eku(
+        content=(
+            "Paragraph one contains accounting information.\n\n"
+            "Paragraph two contains financial information.\n\n"
+            "Paragraph three contains management information.\n\n"
+            "Paragraph four contains reporting information."
+        )
+    )
+
+    result = chunker.chunk([eku])
+
+    indexes = [
+        chunk.chunk_index
+        for chunk in result
+    ]
+
+    assert indexes == list(
+        range(len(result))
+    )
+
+
+# ============================================================
+# TOTAL CHUNKS
+# ============================================================
+
+
+def test_total_chunks_is_consistent() -> None:
+    """Every chunk should know how many chunks its EKU produced."""
+
+    chunker = SemanticChunker(
+        target_tokens=10,
+        max_tokens=15,
+        overlap_tokens=0,
+    )
+
+    eku = make_eku(
+        content=(
+        "Paragraph one contains detailed information about "
+        "accounting and financial transactions.\n\n"
+        "Paragraph two explains how accounting information "
+        "is classified and recorded systematically.\n\n"
+        "Paragraph three describes how financial information "
+        "is summarised for reporting purposes.\n\n"
+        "Paragraph four explains how users apply accounting "
+        "information when making economic decisions."
+        ),
+    )
+
+    result = chunker.chunk([eku])
+
+    assert len(result) > 1
+
+    assert all(
+        chunk.total_chunks == len(result)
+        for chunk in result
+    )
+
+
+# ============================================================
+# TOKEN COUNT
+# ============================================================
+
+
+def test_token_count_is_recorded() -> None:
+    """Every chunk should contain a positive token estimate."""
+
+    chunker = SemanticChunker()
+
+    eku = make_eku(
+        content=(
+            "Accounting records financial transactions "
+            "and communicates useful information."
+        )
+    )
+
+    result = chunker.chunk([eku])
+
+    assert len(result) == 1
+
+    chunk = result[0]
+
+    assert chunk.token_count > 0
+
+    assert chunk.token_count == (
+        chunker.estimate_tokens(chunk.text)
+    )
+
+
+# ============================================================
+# LEARNING OUTCOME
+# ============================================================
+
+
+def test_learning_outcome_remains_atomic() -> None:
+    """
+    Learning outcomes should not be split even when they exceed
+    the normal target size.
+    """
+
+    chunker = SemanticChunker(
+        target_tokens=10,
+        max_tokens=15,
+        overlap_tokens=0,
+    )
+
+    eku = make_eku(
+        educational_type=EducationalType.LEARNING_OUTCOME,
+        content=(
+            "After studying this unit, the student should be able "
+            "to understand accounting concepts, explain accounting "
+            "principles, identify different accounting processes, "
+            "and apply those principles to practical situations."
+        ),
+    )
+
+    result = chunker.chunk([eku])
+
+    assert len(result) == 1
+    assert result[0].text == eku.content
+
+
+# ============================================================
+# PRACTICE QUESTION
+# ============================================================
+
+
+def test_practice_question_remains_atomic() -> None:
+    """A practice question should remain one retrieval unit."""
+
+    chunker = SemanticChunker(
+        target_tokens=10,
+        max_tokens=15,
+        overlap_tokens=0,
+    )
+
+    eku = make_eku(
+        educational_type=EducationalType.PRACTICE_QUESTION,
+        content=(
+            "Explain the meaning, objectives, functions and "
+            "importance of accounting in detail."
+        ),
+    )
+
+    result = chunker.chunk([eku])
+
+    assert len(result) == 1
+    assert result[0].text == eku.content
+
+
+# ============================================================
+# EXAM QUESTION
+# ============================================================
+
+
+def test_exam_question_remains_atomic() -> None:
+    """An examination question should remain intact."""
+
+    chunker = SemanticChunker(
+        target_tokens=10,
+        max_tokens=15,
+        overlap_tokens=0,
+    )
+
+    eku = make_eku(
+        educational_type=EducationalType.EXAM_QUESTION,
+        content=(
+            "Explain the accounting equation and discuss "
+            "its components with suitable examples."
+        ),
+    )
+
+    result = chunker.chunk([eku])
+
+    assert len(result) == 1
+    assert result[0].text == eku.content
+
+
+# ============================================================
+# FORMULA
+# ============================================================
+
+
+def test_formula_remains_atomic() -> None:
+    """A formula should remain intact."""
+
+    chunker = SemanticChunker(
+        target_tokens=2,
+        max_tokens=5,
+        overlap_tokens=0,
+    )
+
+    eku = make_eku(
+        educational_type=EducationalType.FORMULA,
+        content=(
+            "Assets = Liabilities + Capital"
+        ),
+    )
+
+    result = chunker.chunk([eku])
+
+    assert len(result) == 1
+
+    assert result[0].text == (
+        "Assets = Liabilities + Capital"
+    )
+
+
+# ============================================================
+# OVERLAP
+# ============================================================
+
+
+def test_overlap_is_applied_when_eku_is_split() -> None:
+    """Neighboring chunks should share a small amount of context."""
+
+    chunker = SemanticChunker(
+        target_tokens=12,
+        max_tokens=18,
+        overlap_tokens=3,
+        min_tokens=1,
+    )
+
+    eku = make_eku(
+        content=(
+            "Accounting records financial transactions carefully. "
+            "Financial transactions are classified systematically. "
+            "Classified information is summarised for reporting. "
+            "Reports help users make economic decisions."
+        )
+    )
+
+    result = chunker.chunk([eku])
+
+    assert len(result) > 1
+
+    overlap_found = False
+
+    for previous, current in zip(
+        result,
+        result[1:],
+    ):
+        previous_words = previous.text.split()
+        current_words = current.text.split()
+
+        if not previous_words or not current_words:
+            continue
+
+        previous_tail = set(
+            previous_words[-3:]
+        )
+
+        current_head = set(
+            current_words[:3]
+        )
+
+        if previous_tail.intersection(
+            current_head
+        ):
+            overlap_found = True
+            break
+
+    assert overlap_found is True
+
+
+# ============================================================
+# MAXIMUM SIZE
+# ============================================================
+
+
+def test_chunks_do_not_exceed_maximum_size() -> None:
+    """Normal chunks should respect the configured maximum."""
+
+    chunker = SemanticChunker(
+        target_tokens=15,
+        max_tokens=20,
+        overlap_tokens=2,
+    )
+
+    eku = make_eku(
+        content=(
+            "Accounting records business transactions carefully. "
+            "Transactions are classified according to their nature. "
+            "Financial information is summarised systematically. "
+            "The resulting information is communicated to users. "
+            "Users rely on accounting information for decisions. "
+            "Therefore accounting supports economic decision making."
+        )
+    )
+
+    result = chunker.chunk([eku])
+
+    assert len(result) > 1
+
+    assert all(
+        chunk.token_count
+        <= chunker.max_tokens
+        for chunk in result
+    )
+
+
+# ============================================================
+# HIERARCHY
+# ============================================================
+
+
+def test_chunking_preserves_eku_metadata_hierarchy() -> None:
+    """Hierarchy should remain unchanged after chunking."""
+
+    chunker = SemanticChunker()
+
+    eku = make_eku()
+
+    result = chunker.chunk([eku])
+
+    assert len(result) == 1
+
+    chunk = result[0]
+
+    assert chunk.metadata.chapter == "Chapter 1"
+    assert chunk.metadata.unit == "Unit 1"
+    assert chunk.metadata.topic == "1.1 Introduction"
+
+
+# ============================================================
+# MULTIPLE EKUS
+# ============================================================
+
+
+def test_multiple_ekus_are_chunked_independently() -> None:
+    """
+    Chunks from different EKUs must never be merged.
+    """
+
+    chunker = SemanticChunker(
+        target_tokens=10,
+        max_tokens=15,
+        overlap_tokens=0,
+    )
+
+    eku_one = make_eku(
+        eku_id="eku-1",
+        content=(
+            "Accounting records transactions.\n\n"
+            "Accounting classifies transactions."
+        ),
+    )
+
+    eku_two = make_eku(
+        eku_id="eku-2",
+        content=(
+            "Financial statements communicate information.\n\n"
+            "Users analyse financial statements."
+        ),
+    )
+
+    result = chunker.chunk(
+        [
+            eku_one,
+            eku_two,
+        ]
+    )
+
+    assert len(result) >= 2
+
+    eku_ids = {
+        chunk.eku_id
+        for chunk in result
+    }
+
+    assert eku_ids == {
+        "eku-1",
+        "eku-2",
+    }
+
+    # Verify no chunk contains content from the other EKU.
+    for chunk in result:
+        if chunk.eku_id == "eku-1":
+            assert "Financial statements" not in chunk.text
+
+        if chunk.eku_id == "eku-2":
+            assert "Accounting records" not in chunk.text
