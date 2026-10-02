@@ -37,6 +37,17 @@ from app.ingestion.models import (
 )
 
 
+def test_chunk_ids_are_deterministic():
+    chunker = SemanticChunker()
+
+    eku = make_eku()
+
+    first_run = chunker.chunk([eku])
+    second_run = chunker.chunk([eku])
+
+    assert first_run[0].chunk_id == second_run[0].chunk_id
+
+
 # ============================================================
 # TEST HELPERS
 # ============================================================

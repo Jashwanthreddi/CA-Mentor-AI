@@ -29,15 +29,15 @@ Design principles
 """
 
 from __future__ import annotations
-
+import hashlib
 import re
-from uuid import uuid4
-
+from uuid import UUID, uuid5
 from app.ingestion.models import (
     EducationalKnowledgeUnit,
     EducationalType,
     DocumentChunk,
 )
+CHUNK_ID_NAMESPACE = UUID("7d4c2f7a-4d4e-4d74-9e8f-8e4a0c1b4a4a")
 
 
 class SemanticChunker:
@@ -590,16 +590,17 @@ class SemanticChunker:
         """
 
         cleaned_text = self._clean_text(text)
-
         return DocumentChunk(
-            chunk_id=self._generate_chunk_id(),
+            chunk_id=self._generate_chunk_id(
+                eku=eku,
+                text=cleaned_text,
+                chunk_index=chunk_index,
+            ),
             eku_id=eku.id,
             chunk_index=chunk_index,
             total_chunks=total_chunks,
             text=cleaned_text,
-            token_count=self.estimate_tokens(
-                cleaned_text
-            ),
+            token_count=self.estimate_tokens(cleaned_text),
             metadata=eku.metadata,
         )
 
@@ -662,9 +663,37 @@ class SemanticChunker:
     # ========================================================
     # ID GENERATION
     # ========================================================
-
     @staticmethod
-    def _generate_chunk_id() -> str:
-        """Generate a globally unique chunk ID."""
+    def _generate_chunk_id(
+        *,
+        eku: EducationalKnowledgeUnit,
+        text: str,
+        chunk_index: int,
+    ) -> str:
+        """Generate a deterministic chunk ID."""
 
-        return f"chunk-{uuid4()}"
+        metadata = eku.metadata
+
+        identity = "|".join(
+            [
+                metadata.level.value,
+                metadata.paper,
+                metadata.module or "",
+                metadata.chapter or "",
+                metadata.unit or "",
+                metadata.topic or "",
+                metadata.subtopic or "",
+                metadata.educational_type.value,
+                str(metadata.page_start),
+                str(metadata.page_end),
+                str(chunk_index),
+                text,
+            ]
+        )
+
+        deterministic_uuid = uuid5(
+            CHUNK_ID_NAMESPACE,
+            identity,
+        )
+
+        return f"chunk-{deterministic_uuid}"
