@@ -2,20 +2,24 @@
 Tests for the end-to-end ingestion pipeline orchestration.
 
 These tests verify that IngestionPipeline:
+
     - calls every ingestion stage in the correct order
     - passes the output of one stage to the next
+    - builds authoritative document metadata
+    - passes document metadata into the parser
     - stops when validation fails
     - returns the uploader's IngestionReport
     - supports dependency injection
 
 The tests intentionally do NOT:
+
     - process a real PDF
     - load the BGE model
     - connect to Qdrant Cloud
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -23,6 +27,7 @@ from app.ingestion.models import (
     ChunkMetadata,
     DocumentChunk,
     EmbeddedChunk,
+    DocumentMetadata,
     EducationalKnowledgeUnit,
     EducationalElement,
     EducationalType,
@@ -64,6 +69,22 @@ def create_raw_document() -> RawDocument:
     )
 
 
+def create_document_metadata() -> DocumentMetadata:
+    """Create authoritative document metadata for pipeline testing."""
+
+    return DocumentMetadata(
+        document_id="doc-test-1",
+        filename="test.pdf",
+        title="Test Document",
+        source="ICAI",
+        edition="test-edition",
+        language="English",
+        level="foundation",
+        paper="Paper 1",
+        total_pages=1,
+    )
+
+
 def create_element() -> EducationalElement:
     """Create a minimal EducationalElement."""
 
@@ -82,6 +103,9 @@ def create_knowledge_unit() -> EducationalKnowledgeUnit:
     """Create a minimal EducationalKnowledgeUnit."""
 
     metadata = ChunkMetadata(
+        document_id="doc-test-1",
+        source="ICAI",
+        edition="test-edition",
         level="foundation",
         paper="Paper 1",
         module="Module 1",
@@ -109,6 +133,9 @@ def create_chunk() -> DocumentChunk:
     """Create a minimal DocumentChunk."""
 
     metadata = ChunkMetadata(
+        document_id="doc-test-1",
+        source="ICAI",
+        edition="test-edition",
         level="foundation",
         paper="Paper 1",
         module="Module 1",
@@ -136,6 +163,9 @@ def create_embedded_chunk() -> EmbeddedChunk:
     """Create a minimal EmbeddedChunk."""
 
     metadata = ChunkMetadata(
+        document_id="doc-test-1",
+        source="ICAI",
+        edition="test-edition",
         level="foundation",
         paper="Paper 1",
         module="Module 1",
@@ -194,6 +224,7 @@ def pipeline_components():
 
     loader = MagicMock()
     extractor = MagicMock()
+    document_metadata_builder = MagicMock()
     classifier = MagicMock()
     parser = MagicMock()
     chunker = MagicMock()
@@ -203,6 +234,7 @@ def pipeline_components():
     uploader = MagicMock()
 
     raw_document = create_raw_document()
+    document_metadata = create_document_metadata()
     elements = [create_element()]
     knowledge_units = [create_knowledge_unit()]
     chunks = [create_chunk()]
@@ -210,10 +242,17 @@ def pipeline_components():
     report = create_ingestion_report()
 
     loader.load.return_value = Path("test.pdf")
+
     extractor.extract.return_value = raw_document
+
+    document_metadata_builder.build.return_value = document_metadata
+
     classifier.classify.return_value = elements
+
     parser.parse.return_value = knowledge_units
+
     chunker.chunk.return_value = chunks
+
     metadata_builder.build.return_value = chunks
 
     validation_result = MagicMock()
@@ -226,11 +265,13 @@ def pipeline_components():
     validator.validate.return_value = validation_result
 
     embedder.embed.return_value = embedded_chunks
+
     uploader.upload.return_value = report
 
     pipeline = IngestionPipeline(
         loader=loader,
         extractor=extractor,
+        document_metadata_builder=document_metadata_builder,
         classifier=classifier,
         parser=parser,
         chunker=chunker,
@@ -244,6 +285,7 @@ def pipeline_components():
         "pipeline": pipeline,
         "loader": loader,
         "extractor": extractor,
+        "document_metadata_builder": document_metadata_builder,
         "classifier": classifier,
         "parser": parser,
         "chunker": chunker,
@@ -252,6 +294,7 @@ def pipeline_components():
         "embedder": embedder,
         "uploader": uploader,
         "raw_document": raw_document,
+        "document_metadata": document_metadata,
         "elements": elements,
         "knowledge_units": knowledge_units,
         "chunks": chunks,
@@ -293,6 +336,7 @@ def test_pipeline_calls_all_stages(pipeline_components):
 
     pipeline_components["loader"].load.assert_called_once()
     pipeline_components["extractor"].extract.assert_called_once()
+    pipeline_components["document_metadata_builder"].build.assert_called_once()
     pipeline_components["classifier"].classify.assert_called_once()
     pipeline_components["parser"].parse.assert_called_once()
     pipeline_components["chunker"].chunk.assert_called_once()
@@ -329,6 +373,7 @@ def test_pipeline_preserves_stage_data_flow(pipeline_components):
 
     loader = pipeline_components["loader"]
     extractor = pipeline_components["extractor"]
+    document_metadata_builder = pipeline_components["document_metadata_builder"]
     classifier = pipeline_components["classifier"]
     parser = pipeline_components["parser"]
     chunker = pipeline_components["chunker"]
@@ -342,12 +387,18 @@ def test_pipeline_preserves_stage_data_flow(pipeline_components):
         page_range=None,
     )
 
+    document_metadata_builder.build.assert_called_once_with(
+        pdf_path=Path("test.pdf"),
+        raw_document=pipeline_components["raw_document"],
+    )
+
     classifier.classify.assert_called_once_with(
         pipeline_components["raw_document"]
     )
 
     parser.parse.assert_called_once_with(
-        pipeline_components["elements"]
+        pipeline_components["elements"],
+        document_metadata=pipeline_components["document_metadata"],
     )
 
     chunker.chunk.assert_called_once_with(
@@ -365,8 +416,8 @@ def test_pipeline_preserves_stage_data_flow(pipeline_components):
     embedder.embed.assert_called_once_with(
         pipeline_components["chunks"]
     )
-
     uploader.upload.assert_called_once()
+    # uploader.assert_called_once() if False else None
 
 
 def test_pipeline_returns_uploader_report(pipeline_components):
@@ -427,6 +478,7 @@ def test_pipeline_stops_when_validation_fails(pipeline_components):
     pipeline = pipeline_components["pipeline"]
 
     validation_result = pipeline_components["validation_result"]
+
     validation_result.is_valid = False
     validation_result.valid_count = 0
     validation_result.invalid_count = 1
@@ -469,29 +521,32 @@ def test_pipeline_supports_dependency_injection():
         MagicMock(),
         MagicMock(),
         MagicMock(),
+        MagicMock(),
     ]
 
     pipeline = IngestionPipeline(
         loader=components[0],
         extractor=components[1],
-        classifier=components[2],
-        parser=components[3],
-        chunker=components[4],
-        metadata_builder=components[5],
-        validator=components[6],
-        embedder=components[7],
-        uploader=components[8],
+        document_metadata_builder=components[2],
+        classifier=components[3],
+        parser=components[4],
+        chunker=components[5],
+        metadata_builder=components[6],
+        validator=components[7],
+        embedder=components[8],
+        uploader=components[9],
     )
 
     assert pipeline.loader is components[0]
     assert pipeline.extractor is components[1]
-    assert pipeline.classifier is components[2]
-    assert pipeline.parser is components[3]
-    assert pipeline.chunker is components[4]
-    assert pipeline.metadata_builder is components[5]
-    assert pipeline.validator is components[6]
-    assert pipeline.embedder is components[7]
-    assert pipeline.uploader is components[8]
+    assert pipeline.document_metadata_builder is components[2]
+    assert pipeline.classifier is components[3]
+    assert pipeline.parser is components[4]
+    assert pipeline.chunker is components[5]
+    assert pipeline.metadata_builder is components[6]
+    assert pipeline.validator is components[7]
+    assert pipeline.embedder is components[8]
+    assert pipeline.uploader is components[9]
 
 
 def test_pipeline_calculates_table_count(pipeline_components):

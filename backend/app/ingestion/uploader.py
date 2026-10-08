@@ -220,6 +220,12 @@ class QdrantUploader:
             "text": chunk.text,
             "token_count": chunk.token_count,
 
+
+            # Document provenance
+            "document_id": metadata.document_id,
+            "source": metadata.source,
+            "edition": metadata.edition,
+
             # Academic hierarchy
             "level": metadata.level.value,
             "paper": metadata.paper,
@@ -228,6 +234,7 @@ class QdrantUploader:
             "unit": metadata.unit,
             "topic": metadata.topic,
             "subtopic": metadata.subtopic,
+
 
             # Educational metadata
             "educational_type": (

@@ -137,19 +137,37 @@ class RelationshipType(str, Enum):
 
 
 class DocumentMetadata(BaseModel):
-    """Metadata describing the source document."""
+    """
+    Authoritative metadata describing the source document.
+
+    This is intentionally separate from RawDocumentMetadata.
+
+    RawDocumentMetadata describes extraction.
+
+    DocumentMetadata describes the academic/source identity
+    of the document.
+    """
 
     document_id: str
+
     filename: str
+
     title: str
+
     source: str
+
     edition: str
+
     language: str = "English"
 
     level: DocumentLevel
+
     paper: str
 
-    total_pages: int = Field(default=0, ge=0)
+    total_pages: int = Field(
+        default=0,
+        ge=0,
+    )
 
 
 # ============================================================
@@ -161,6 +179,7 @@ class RelationshipMetadata(BaseModel):
     """Relationship between the current EKU and another EKU."""
 
     relationship: RelationshipType
+
     target_id: str
 
 
@@ -174,6 +193,7 @@ class ChunkMetadata(BaseModel):
     Metadata attached to every retrieval chunk.
 
     This metadata will later be used by:
+
         - metadata filtering
         - BM25 retrieval
         - dense retrieval
@@ -182,29 +202,83 @@ class ChunkMetadata(BaseModel):
         - analytics
     """
 
+    # --------------------------------------------------------
+    # DOCUMENT IDENTITY
+    # --------------------------------------------------------
+
+    document_id: str
+
+    source: str
+
+    edition: str
+
+    # --------------------------------------------------------
+    # ACADEMIC IDENTITY
+    # --------------------------------------------------------
+
     level: DocumentLevel
+
     paper: str
 
+    # --------------------------------------------------------
+    # DOCUMENT HIERARCHY
+    # --------------------------------------------------------
+
     module: str | None = None
+
     chapter: str | None = None
+
     unit: str | None = None
+
     topic: str | None = None
+
     subtopic: str | None = None
+
+    # --------------------------------------------------------
+    # EDUCATIONAL SEMANTICS
+    # --------------------------------------------------------
 
     educational_type: EducationalType
 
-    difficulty: DifficultyLevel = DifficultyLevel.BEGINNER
-    teaching_priority: TeachingPriority = TeachingPriority.HIGH
+    difficulty: DifficultyLevel = (
+        DifficultyLevel.BEGINNER
+    )
 
-    embedding_strategy: EmbeddingStrategy = EmbeddingStrategy.FULL
+    teaching_priority: TeachingPriority = (
+        TeachingPriority.HIGH
+    )
 
-    page_start: int = Field(ge=1)
-    page_end: int = Field(ge=1)
+    embedding_strategy: EmbeddingStrategy = (
+        EmbeddingStrategy.FULL
+    )
+
+    # --------------------------------------------------------
+    # PROVENANCE
+    # --------------------------------------------------------
+
+    page_start: int = Field(
+        ge=1
+    )
+
+    page_end: int = Field(
+        ge=1
+    )
+
+    # --------------------------------------------------------
+    # STRUCTURAL FLAGS
+    # --------------------------------------------------------
 
     has_table: bool = False
+
     has_image: bool = False
+
     has_formula: bool = False
+
     has_example: bool = False
+
+    # --------------------------------------------------------
+    # METADATA SCHEMA VERSION
+    # --------------------------------------------------------
 
     version: str
 
@@ -218,14 +292,23 @@ class TableMetadata(BaseModel):
     """Metadata describing a table contained in an EKU."""
 
     title: str | None = None
-    rows: int = Field(default=0, ge=0)
-    columns: int = Field(default=0, ge=0)
+
+    rows: int = Field(
+        default=0,
+        ge=0,
+    )
+
+    columns: int = Field(
+        default=0,
+        ge=0,
+    )
 
 
 class ImageMetadata(BaseModel):
     """Metadata describing an image/diagram."""
 
     caption: str | None = None
+
     image_type: str | None = None
 
 
@@ -258,13 +341,22 @@ class EducationalElement(BaseModel):
 
     content: str
 
-    page_start: int = Field(ge=1)
-    page_end: int = Field(ge=1)
+    page_start: int = Field(
+        ge=1
+    )
 
-    hierarchy_path: list[str] = Field(default_factory=list)
+    page_end: int = Field(
+        ge=1
+    )
+
+    hierarchy_path: list[str] = Field(
+        default_factory=list
+    )
 
     # Provenance back to RawBlock objects.
-    source_block_ids: list[str] = Field(default_factory=list)
+    source_block_ids: list[str] = Field(
+        default_factory=list
+    )
 
     confidence: float | None = Field(
         default=None,
@@ -273,7 +365,9 @@ class EducationalElement(BaseModel):
     )
 
     # Additional classifier metadata.
-    metadata: dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, str] = Field(
+        default_factory=dict
+    )
 
 
 # ============================================================
@@ -287,14 +381,6 @@ class EducationalKnowledgeUnit(BaseModel):
 
     The parser creates EKUs by combining one or more
     EducationalElements.
-
-    Example:
-
-        EducationalElement 1
-        EducationalElement 2
-        EducationalElement 3
-                ↓
-        EducationalKnowledgeUnit
     """
 
     id: str
@@ -307,10 +393,14 @@ class EducationalKnowledgeUnit(BaseModel):
 
     metadata: ChunkMetadata
 
-    hierarchy_path: list[str] = Field(default_factory=list)
+    hierarchy_path: list[str] = Field(
+        default_factory=list
+    )
 
     # Provenance from EKU back to classifier output.
-    source_element_ids: list[str] = Field(default_factory=list)
+    source_element_ids: list[str] = Field(
+        default_factory=list
+    )
 
     relationships: list[RelationshipMetadata] = Field(
         default_factory=list
@@ -336,7 +426,9 @@ class ChunkCandidate(BaseModel):
     """
 
     eku_id: str
+
     text: str
+
     metadata: ChunkMetadata
 
 
@@ -353,16 +445,27 @@ class DocumentChunk(BaseModel):
     eku_id: str
 
     # Position within the parent EKU.
-    chunk_index: int = Field(default=0, ge=0)
-    total_chunks: int = Field(default=1, ge=1)
+    chunk_index: int = Field(
+        default=0,
+        ge=0,
+    )
+
+    total_chunks: int = Field(
+        default=1,
+        ge=1,
+    )
 
     # Retrieval text.
     text: str
 
     # Estimated token count in V1.
-    token_count: int = Field(default=0, ge=0)
+    token_count: int = Field(
+        default=0,
+        ge=0,
+    )
 
     metadata: ChunkMetadata
+
 
 # ============================================================
 # EMBEDDING

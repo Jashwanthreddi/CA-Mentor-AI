@@ -10,9 +10,7 @@ pdf_path = Path(
 
 pipeline = IngestionPipeline()
 
-report = pipeline.run(
-    pdf_path,
-    page_range=(1, 3),
-)
+report = pipeline.run(pdf_path)
 
-print(report)
+print("\n=== INGESTION RESULT ===")
+print(report.model_dump())

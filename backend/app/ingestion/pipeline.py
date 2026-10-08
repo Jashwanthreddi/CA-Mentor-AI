@@ -9,6 +9,8 @@ Loader
     ↓
 Extractor
     ↓
+Document Metadata
+    ↓
 Classifier
     ↓
 Parser
@@ -33,8 +35,10 @@ from pathlib import Path
 from time import perf_counter
 
 from app.core.logging import logger
+
 from app.ingestion.classifier import EducationalClassifier
 from app.ingestion.chunker import SemanticChunker
+from app.ingestion.document_metadata import DocumentMetadataBuilder
 from app.ingestion.embedder import DocumentEmbedder
 from app.ingestion.extractor import PDFExtractor
 from app.ingestion.loader import PDFLoader
@@ -57,6 +61,7 @@ class IngestionPipeline:
         self,
         loader: PDFLoader | None = None,
         extractor: PDFExtractor | None = None,
+        document_metadata_builder: DocumentMetadataBuilder | None = None,
         classifier: EducationalClassifier | None = None,
         parser: EducationalParser | None = None,
         chunker: SemanticChunker | None = None,
@@ -75,15 +80,24 @@ class IngestionPipeline:
 
         self.loader = loader or PDFLoader()
         self.extractor = extractor or PDFExtractor()
+
+        self.document_metadata_builder = (
+            document_metadata_builder
+            or DocumentMetadataBuilder()
+        )
+
         self.classifier = classifier or EducationalClassifier()
         self.parser = parser or EducationalParser()
         self.chunker = chunker or SemanticChunker()
+
         self.metadata_builder = (
             metadata_builder or MetadataBuilder()
         )
+
         self.validator = (
             validator or DocumentChunkValidator()
         )
+
         self.embedder = embedder or DocumentEmbedder()
         self.uploader = uploader or QdrantUploader()
 
@@ -140,57 +154,99 @@ class IngestionPipeline:
         )
 
         # ---------------------------------------------------------
-        # 3. CLASSIFY
+        # 3. DOCUMENT METADATA
+        # ---------------------------------------------------------
+        #
+        # Build authoritative document-level metadata from the
+        # ingestion path and RawDocument.
+        #
+        # This metadata is created once and then passed into the
+        # parser so EKUs receive the correct:
+        #
+        #   document_id
+        #   source
+        #   edition
+        #   level
+        #   paper
+        #
+        document_metadata = self.document_metadata_builder.build(
+            pdf_path=document_path,
+            raw_document=raw_document,
+        )
+
+        logger.info(
+            f"[3/10] Document metadata created: "
+            f"level={document_metadata.level.value}, "
+            f"paper={document_metadata.paper}, "
+            f"document_id={document_metadata.document_id}"
+        )
+
+        # ---------------------------------------------------------
+        # 4. CLASSIFY
         # ---------------------------------------------------------
         educational_elements = self.classifier.classify(
             raw_document
         )
 
         logger.info(
-            f"[3/10] Classification completed: "
+            f"[4/10] Classification completed: "
             f"{len(educational_elements)} elements"
         )
 
         # ---------------------------------------------------------
-        # 4. PARSE
+        # 5. PARSE
         # ---------------------------------------------------------
+        #
+        # The parser receives authoritative document metadata.
+        #
+        # This prevents document-level fields such as level and
+        # paper from falling back to defaults such as:
+        #
+        #   foundation
+        #   unknown
+        #
         knowledge_units = self.parser.parse(
-            educational_elements
+            educational_elements,
+            document_metadata=document_metadata,
         )
 
         logger.info(
-            f"[4/10] Parsing completed: "
+            f"[5/10] Parsing completed: "
             f"{len(knowledge_units)} knowledge units"
         )
 
         # ---------------------------------------------------------
-        # 5. CHUNK
+        # 6. CHUNK
         # ---------------------------------------------------------
         chunks = self.chunker.chunk(
             knowledge_units
         )
 
         logger.info(
-            f"[5/10] Chunking completed: "
+            f"[6/10] Chunking completed: "
             f"{len(chunks)} chunks"
         )
 
         # ---------------------------------------------------------
-        # 6. METADATA
+        # 7. METADATA
         # ---------------------------------------------------------
-        chunks = self.metadata_builder.build(chunks)
+        chunks = self.metadata_builder.build(
+            chunks
+        )
 
         logger.info(
-            "[6/10] Metadata enrichment completed."
+            "[7/10] Metadata enrichment completed."
         )
 
         # ---------------------------------------------------------
-        # 7. VALIDATE
+        # 8. VALIDATE
         # ---------------------------------------------------------
-        validation_result = self.validator.validate(chunks)
+        validation_result = self.validator.validate(
+            chunks
+        )
 
         logger.info(
-            f"[7/10] Validation completed: "
+            f"[8/10] Validation completed: "
             f"{validation_result.valid_count} valid, "
             f"{validation_result.invalid_count} invalid"
         )
@@ -210,7 +266,7 @@ class IngestionPipeline:
         valid_chunks = validation_result.valid_chunks
 
         # ---------------------------------------------------------
-        # 8. EMBED
+        # 9. EMBED + UPLOAD
         # ---------------------------------------------------------
         embedding_start = perf_counter()
 
@@ -223,14 +279,11 @@ class IngestionPipeline:
         )
 
         logger.info(
-            f"[8/10] Embedding completed: "
+            f"[9/10] Embedding completed: "
             f"{len(embedded_chunks)} vectors "
             f"in {embedding_time:.3f}s"
         )
 
-        # ---------------------------------------------------------
-        # 9. UPLOAD
-        # ---------------------------------------------------------
         tables = sum(
             1
             for chunk in valid_chunks

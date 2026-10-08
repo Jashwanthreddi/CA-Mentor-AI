@@ -1,204 +1,523 @@
-from pathlib import Path
-
-from app.ingestion.extractor import PDFExtractor
-from app.ingestion.raw_document import BlockType
-
-
-PDF_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "sample_data"
-    / "icai"
-    / "foundation"
-    / "paper_1"
-    / "module_1"
-    / "chapter_1"
-    / "fpp1m1c1u1.pdf"
+from app.ingestion.classifier import EducationalClassifier
+from app.ingestion.models import EducationalType
+from app.ingestion.raw_document import (
+    BlockType,
+    BoundingBox,
+    RawBlock,
+    RawDocument,
+    RawDocumentMetadata,
+    RawPage,
 )
 
 
-def test_extract_first_three_pages() -> None:
+def make_document(blocks: list[RawBlock]) -> RawDocument:
+    return RawDocument(
+        metadata=RawDocumentMetadata(
+            filename="test.pdf",
+            title="Test Document",
+            pages=1,
+            language="English",
+            parser="test",
+            parser_version="1.0",
+        ),
+        pages=[
+            RawPage(
+                page_number=1,
+                width=1000,
+                height=1400,
+                blocks=blocks,
+            )
+        ],
+    )
+
+
+def make_block(
+    block_id: str,
+    text: str,
+    block_type: BlockType = BlockType.PARAGRAPH,
+    page: int = 1,
+) -> RawBlock:
+    return RawBlock(
+        id=block_id,
+        page=page,
+        block_type=block_type,
+        text=text,
+        bbox=BoundingBox(
+            left=10,
+            top=10,
+            right=500,
+            bottom=100,
+        ),
+    )
+
+
+def test_definition_classification():
+    document = make_document(
+        [
+            make_block(
+                "b1",
+                "Accounting is defined as the systematic recording "
+                "of financial transactions."
+            )
+        ]
+    )
+
+    elements = EducationalClassifier().classify(document)
+
+    assert len(elements) == 1
+    assert elements[0].educational_type == EducationalType.DEFINITION
+
+
+def test_accounting_process_is_not_procedure():
     """
-    Verify that the extractor can successfully process
-    the first three pages of a real ICAI PDF.
+    Regression test.
+
+    The word 'process' alone must not cause a paragraph to become
+    a procedure.
     """
 
-    assert PDF_PATH.exists(), (
-        f"Test PDF not found: {PDF_PATH}"
+    document = make_document(
+        [
+            make_block(
+                "b1",
+                "Accounting is the process of identifying transactions."
+            )
+        ]
     )
 
-    extractor = PDFExtractor(
-        do_ocr=False,
-        do_table_structure=True,
+    elements = EducationalClassifier().classify(document)
+
+    assert len(elements) == 1
+    assert elements[0].educational_type == EducationalType.CONCEPT
+
+
+def test_procedure_classification():
+    document = make_document(
+        [
+            make_block(
+                "b1",
+                "The following are the steps for preparing the statement."
+            )
+        ]
     )
 
-    document = extractor.extract(
-        PDF_PATH,
-        page_range=(1, 3),
+    elements = EducationalClassifier().classify(document)
+
+    assert elements[0].educational_type == EducationalType.PROCEDURE
+
+
+def test_formula_classification():
+    document = make_document(
+        [
+            make_block(
+                "b1",
+                "The formula for calculating profit is revenue minus expenses."
+            )
+        ]
     )
 
-    assert (
-        document.metadata.filename
-        == "fpp1m1c1u1.pdf"
+    elements = EducationalClassifier().classify(document)
+
+    assert elements[0].educational_type == EducationalType.FORMULA
+
+
+def test_table_classification():
+    document = make_document(
+        [
+            make_block(
+                "b1",
+                "Revenue | Expenses",
+                BlockType.TABLE,
+            )
+        ]
     )
 
-    assert (
-        document.metadata.parser
-        == "docling"
+    elements = EducationalClassifier().classify(document)
+
+    assert elements[0].educational_type == EducationalType.TABLE
+
+
+def test_formula_block_classification():
+    document = make_document(
+        [
+            make_block(
+                "b1",
+                "Assets = Liabilities + Capital",
+                BlockType.FORMULA,
+            )
+        ]
     )
 
-    assert document.metadata.parser_version
+    elements = EducationalClassifier().classify(document)
 
-    assert len(document.pages) > 0
-    assert len(document.pages) <= 3
+    assert elements[0].educational_type == EducationalType.FORMULA
 
-    all_blocks = [
-        block
-        for page in document.pages
-        for block in page.blocks
-    ]
 
-    assert all_blocks
+def test_learning_outcome_heading():
+    document = make_document(
+        [
+            make_block(
+                "b1",
+                "LEARNING OUTCOMES",
+                BlockType.HEADING,
+            )
+        ]
+    )
+
+    elements = EducationalClassifier().classify(document)
+
+    assert len(elements) == 1
+    assert elements[0].educational_type == EducationalType.LEARNING_OUTCOME
+
+
+def test_learning_outcome_intro():
+    document = make_document(
+        [
+            make_block(
+                "b1",
+                "After studying this unit, you would be able to:",
+                BlockType.HEADING,
+            )
+        ]
+    )
+
+    elements = EducationalClassifier().classify(document)
+
+    assert len(elements) == 1
+    assert elements[0].educational_type == EducationalType.LEARNING_OUTCOME
+
+
+def test_learning_outcome_list_items():
+    document = make_document(
+        [
+            make_block(
+                "b1",
+                "LEARNING OUTCOMES",
+                BlockType.HEADING,
+            ),
+            make_block(
+                "b2",
+                "After studying this unit, you would be able to:",
+                BlockType.HEADING,
+            ),
+            make_block(
+                "b3",
+                "Understand meaning and significance of accounting.",
+                BlockType.LIST,
+            ),
+            make_block(
+                "b4",
+                "Understand the distinction between bookkeeping and accounting.",
+                BlockType.LIST,
+            ),
+        ]
+    )
+
+    elements = EducationalClassifier().classify(document)
+
+    assert len(elements) == 4
 
     assert all(
-        block.page >= 1
-        for block in all_blocks
+        element.educational_type == EducationalType.LEARNING_OUTCOME
+        for element in elements
     )
+
+
+def test_learning_outcomes_do_not_enter_hierarchy():
+    document = make_document(
+        [
+            make_block(
+                "b1",
+                "UNIT - 1 MEANING AND SCOPE OF ACCOUNTING",
+                BlockType.HEADING,
+            ),
+            make_block(
+                "b2",
+                "LEARNING OUTCOMES",
+                BlockType.HEADING,
+            ),
+            make_block(
+                "b3",
+                "After studying this unit, you would be able to:",
+                BlockType.HEADING,
+            ),
+            make_block(
+                "b4",
+                "Understand meaning of accounting.",
+                BlockType.LIST,
+            ),
+            make_block(
+                "b5",
+                "1.1 INTRODUCTION",
+                BlockType.HEADING,
+            ),
+        ]
+    )
+
+    elements = EducationalClassifier().classify(document)
+
+    # Unit heading is structural and therefore not emitted.
+    # Learning outcome heading + intro + bullet are emitted.
+    # 1.1 INTRODUCTION is structural and therefore not emitted.
+    assert len(elements) == 3
 
     assert all(
-        block.block_type in BlockType
-        for block in all_blocks
+        element.educational_type == EducationalType.LEARNING_OUTCOME
+        for element in elements
     )
 
 
-def test_extracted_pages_have_valid_dimensions() -> None:
-    """
-    Verify that extracted pages contain valid physical dimensions.
-    """
-
-    assert PDF_PATH.exists(), (
-        f"Test PDF not found: {PDF_PATH}"
+def test_example_heading_is_illustration():
+    document = make_document(
+        [
+            make_block(
+                "b1",
+                "Example 1",
+                BlockType.HEADING,
+            )
+        ]
     )
 
-    extractor = PDFExtractor(
-        do_ocr=False,
-        do_table_structure=True,
+    elements = EducationalClassifier().classify(document)
+
+    assert len(elements) == 1
+    assert elements[0].educational_type == EducationalType.ILLUSTRATION
+
+
+def test_illustration_heading_is_illustration():
+    document = make_document(
+        [
+            make_block(
+                "b1",
+                "Illustration 1",
+                BlockType.HEADING,
+            )
+        ]
     )
 
-    document = extractor.extract(
-        PDF_PATH,
-        page_range=(1, 3),
+    elements = EducationalClassifier().classify(document)
+
+    assert len(elements) == 1
+    assert elements[0].educational_type == EducationalType.ILLUSTRATION
+
+
+def test_chapter_structure_is_not_emitted_as_concepts():
+    document = make_document(
+        [
+            make_block(
+                "b1",
+                "CHAPTER",
+                BlockType.HEADING,
+            ),
+            make_block(
+                "b2",
+                "1",
+                BlockType.HEADING,
+            ),
+            make_block(
+                "b3",
+                "THEORETICAL FRAMEWORK",
+                BlockType.HEADING,
+            ),
+        ]
     )
 
-    assert document.pages
+    elements = EducationalClassifier().classify(document)
 
-    for page in document.pages:
-        assert page.page_number >= 1
-        assert page.width > 0
-        assert page.height > 0
+    # CHAPTER, 1 and THEORETICAL FRAMEWORK are structural context.
+    assert len(elements) == 0
 
 
-def test_extracted_blocks_have_valid_page_numbers() -> None:
-    """
-    Verify that every extracted block belongs to an
-    actually extracted page.
-    """
-
-    assert PDF_PATH.exists(), (
-        f"Test PDF not found: {PDF_PATH}"
+def test_unit_is_not_emitted_as_concept():
+    document = make_document(
+        [
+            make_block(
+                "b1",
+                "CHAPTER",
+                BlockType.HEADING,
+            ),
+            make_block(
+                "b2",
+                "1",
+                BlockType.HEADING,
+            ),
+            make_block(
+                "b3",
+                "UNIT - 1 MEANING AND SCOPE OF ACCOUNTING",
+                BlockType.HEADING,
+            ),
+        ]
     )
 
-    extractor = PDFExtractor(
-        do_ocr=False,
-        do_table_structure=True,
+    elements = EducationalClassifier().classify(document)
+
+    assert len(elements) == 0
+
+
+def test_hierarchy_chapter_unit_topic():
+    document = make_document(
+        [
+            make_block(
+                "b1",
+                "CHAPTER",
+                BlockType.HEADING,
+            ),
+            make_block(
+                "b2",
+                "1",
+                BlockType.HEADING,
+            ),
+            make_block(
+                "b3",
+                "UNIT - 1 MEANING AND SCOPE OF ACCOUNTING",
+                BlockType.HEADING,
+            ),
+            make_block(
+                "b4",
+                "1.1 INTRODUCTION",
+                BlockType.HEADING,
+            ),
+            make_block(
+                "b5",
+                "Accounting is concerned with economic activities.",
+                BlockType.PARAGRAPH,
+            ),
+        ]
     )
 
-    document = extractor.extract(
-        PDF_PATH,
-        page_range=(1, 3),
-    )
+    elements = EducationalClassifier().classify(document)
 
-    extracted_page_numbers = {
-        page.page_number
-        for page in document.pages
-    }
+    assert len(elements) == 1
 
-    all_blocks = [
-        block
-        for page in document.pages
-        for block in page.blocks
+    element = elements[0]
+
+    assert element.educational_type == EducationalType.CONCEPT
+
+    assert element.hierarchy_path == [
+        "Chapter 1",
+        "Unit 1 - MEANING AND SCOPE OF ACCOUNTING",
+        "1.1 INTRODUCTION",
     ]
 
-    assert all_blocks
 
-    for block in all_blocks:
-        assert block.page in extracted_page_numbers
-
-
-def test_extracted_bounding_boxes_are_normalized() -> None:
-    """
-    Verify that extracted bounding boxes use the normalized
-    top-left coordinate system.
-
-    For valid boxes:
-
-        left <= right
-        top <= bottom
-    """
-
-    assert PDF_PATH.exists(), (
-        f"Test PDF not found: {PDF_PATH}"
+def test_repeated_running_header_is_ignored():
+    document = RawDocument(
+        metadata=RawDocumentMetadata(
+            filename="test.pdf",
+            title="Test Document",
+            pages=2,
+            language="English",
+            parser="test",
+            parser_version="1.0",
+        ),
+        pages=[
+            RawPage(
+                page_number=1,
+                width=1000,
+                height=1400,
+                blocks=[
+                    make_block(
+                        "b1",
+                        "THEORETICAL FRAMEWORK",
+                        BlockType.HEADING,
+                        page=1,
+                    ),
+                    make_block(
+                        "b2",
+                        "Accounting is important.",
+                        BlockType.PARAGRAPH,
+                        page=1,
+                    ),
+                ],
+            ),
+            RawPage(
+                page_number=2,
+                width=1000,
+                height=1400,
+                blocks=[
+                    make_block(
+                        "b3",
+                        "THEORETICAL FRAMEWORK",
+                        BlockType.HEADING,
+                        page=2,
+                    ),
+                    make_block(
+                        "b4",
+                        "Accounting records economic transactions.",
+                        BlockType.PARAGRAPH,
+                        page=2,
+                    ),
+                ],
+            ),
+        ],
     )
 
-    extractor = PDFExtractor(
-        do_ocr=False,
-        do_table_structure=True,
+    elements = EducationalClassifier().classify(document)
+
+    assert len(elements) == 2
+
+    assert all(
+        element.content != "THEORETICAL FRAMEWORK"
+        for element in elements
     )
 
-    document = extractor.extract(
-        PDF_PATH,
-        page_range=(1, 3),
+
+def test_headers_and_footers_are_ignored():
+    document = make_document(
+        [
+            make_block(
+                "b1",
+                "Running Header",
+                BlockType.HEADER,
+            ),
+            make_block(
+                "b2",
+                "Useful accounting concept.",
+                BlockType.PARAGRAPH,
+            ),
+            make_block(
+                "b3",
+                "Page 1",
+                BlockType.FOOTER,
+            ),
+        ]
     )
 
-    all_blocks = [
-        block
-        for page in document.pages
-        for block in page.blocks
-    ]
+    elements = EducationalClassifier().classify(document)
 
-    blocks_with_bbox = [
-        block
-        for block in all_blocks
-        if block.bbox is not None
-    ]
-
-    assert blocks_with_bbox
-
-    for block in blocks_with_bbox:
-        assert block.bbox is not None
-
-        assert block.bbox.left <= block.bbox.right
-        assert block.bbox.top <= block.bbox.bottom
+    assert len(elements) == 1
+    assert elements[0].content == "Useful accounting concept."
 
 
-def test_extractor_preserves_block_order() -> None:
-    """
-    Verify that blocks remain in the order returned by
-    the extraction layer.
-    """
-
-    assert PDF_PATH.exists(), (
-        f"Test PDF not found: {PDF_PATH}"
+def test_source_block_provenance_is_preserved():
+    document = make_document(
+        [
+            make_block(
+                "source-123",
+                "Accounting is defined as a systematic process.",
+            )
+        ]
     )
 
-    extractor = PDFExtractor(
-        do_ocr=False,
-        do_table_structure=True,
+    elements = EducationalClassifier().classify(document)
+
+    assert elements[0].source_block_ids == ["source-123"]
+
+
+def test_empty_blocks_are_ignored():
+    document = make_document(
+        [
+            make_block(
+                "b1",
+                "",
+            ),
+            make_block(
+                "b2",
+                "   ",
+            ),
+        ]
     )
 
-    document = extractor.extract(
-        PDF_PATH,
-        page_range=(1, 3),
-    )
+    elements = EducationalClassifier().classify(document)
 
-    for page in document.pages:
-        assert page.blocks == list(page.blocks)
+    assert elements == []

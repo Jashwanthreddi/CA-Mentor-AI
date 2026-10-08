@@ -3,24 +3,25 @@ Metadata Builder
 
 Purpose
 -------
-Build and enrich ChunkMetadata for parsed document chunks.
+Normalize and finalize ChunkMetadata for parsed document chunks.
 
-The metadata builder converts information already present in the
-DocumentChunk and its source EKU into retrieval-friendly metadata.
+The builder operates AFTER parsing and chunking.
 
 Responsibilities
 ----------------
-- Preserve educational hierarchy.
+- Preserve document identity.
+- Preserve academic hierarchy.
 - Preserve educational type.
 - Preserve page provenance.
 - Preserve structural flags.
 - Preserve difficulty and teaching priority.
 - Preserve embedding strategy.
-- Add the metadata version.
+- Set the metadata schema version.
 
 The builder does NOT:
 - classify content
-- parse educational meaning
+- infer document identity
+- reconstruct hierarchy
 - generate embeddings
 - access Qdrant
 - access external services
@@ -34,33 +35,26 @@ from app.ingestion.models import DocumentChunk
 
 class MetadataBuilder:
     """
-    Build retrieval and provenance metadata for document chunks.
+    Build final retrieval/provenance metadata for document chunks.
 
-    The builder is deterministic and does not perform external I/O.
+    The builder is deterministic and performs no external I/O.
     """
 
-    METADATA_VERSION = "metadata-v1"
+    METADATA_VERSION = "metadata-v2"
 
     def build(
         self,
         chunks: list[DocumentChunk],
     ) -> list[DocumentChunk]:
         """
-        Enrich all document chunks with metadata.
-
-        Parameters
-        ----------
-        chunks:
-            Document chunks produced by the chunking stage.
-
-        Returns
-        -------
-        list[DocumentChunk]
-            Document chunks with enriched metadata.
+        Finalize metadata for all document chunks.
         """
 
         if not chunks:
-            logger.info("Metadata builder received no chunks.")
+            logger.info(
+                "Metadata builder received no chunks."
+            )
+
             return []
 
         enriched_chunks = [
@@ -69,7 +63,7 @@ class MetadataBuilder:
         ]
 
         logger.info(
-            f"Metadata enrichment completed for "
+            "Metadata enrichment completed for "
             f"{len(enriched_chunks)} chunks."
         )
 
@@ -80,10 +74,12 @@ class MetadataBuilder:
         chunk: DocumentChunk,
     ) -> DocumentChunk:
         """
-        Enrich metadata for a single document chunk.
+        Finalize metadata for one chunk.
 
-        Existing metadata values are preserved. The chunk-level
-        provenance fields are synchronized with the DocumentChunk.
+        Existing semantic metadata is preserved.
+
+        Only normalization/version/provenance fields are
+        modified here.
         """
 
         metadata = chunk.metadata.model_copy(

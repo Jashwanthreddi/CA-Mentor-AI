@@ -27,6 +27,9 @@ def create_chunk(
     """
 
     metadata = ChunkMetadata(
+        document_id="doc-test-foundation-paper1",
+        source="ICAI",
+        edition="test-edition",
         level=DocumentLevel.FOUNDATION,
         paper="Paper 1",
         module="Module 1",

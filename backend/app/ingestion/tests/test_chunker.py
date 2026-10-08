@@ -52,16 +52,18 @@ def test_chunk_ids_are_deterministic():
 # TEST HELPERS
 # ============================================================
 
-
 def make_metadata(
     *,
     educational_type: EducationalType = EducationalType.CONCEPT,
     page_start: int = 1,
     page_end: int = 1,
-) -> ChunkMetadata:
+    ) -> ChunkMetadata:
     """Create standard test metadata."""
 
     return ChunkMetadata(
+        document_id="doc-test-foundation-paper1",
+        source="ICAI",
+        edition="test-edition",
         level=DocumentLevel.FOUNDATION,
         paper="Paper 1",
         module="Module 1",

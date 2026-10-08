@@ -5,18 +5,18 @@ from app.core.responses import success_response
 from app.services.health_service import HealthService
 
 
-router=APIRouter()
+router = APIRouter()
+
 
 @router.get(
     "/health",
     summary="Health check",
-    description="Return the application status"
-
+    description="Return the application status",
 )
 async def health_check():
     logger.info("Health endpoint accessed")
+
     return success_response(
         message="Application is running",
-        data=HealthService.get_health_statud(),
+        data=HealthService.get_health_status(),
     )
-

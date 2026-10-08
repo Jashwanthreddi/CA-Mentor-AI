@@ -18,6 +18,10 @@ def create_chunk(
     """
 
     metadata = ChunkMetadata(
+    
+        document_id="doc-test-foundation-paper1",
+        source="ICAI",
+        edition="test-edition",
         level=DocumentLevel.FOUNDATION,
         paper="Paper 1",
         module="Module 1",
@@ -160,7 +164,7 @@ def test_metadata_version_is_updated():
 
     result = builder.build([chunk])
 
-    assert result[0].metadata.version == "metadata-v1"
+    assert result[0].metadata.version == "metadata-v2"
 
 
 def test_original_metadata_is_not_mutated():
@@ -173,7 +177,7 @@ def test_original_metadata_is_not_mutated():
     result = builder.build([chunk])
 
     assert original_version == "initial"
-    assert result[0].metadata.version == "metadata-v1"
+    assert result[0].metadata.version == "metadata-v2"
 
 
 def test_builder_returns_document_chunks():

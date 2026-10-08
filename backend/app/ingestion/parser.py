@@ -14,18 +14,17 @@ EducationalElement[]
         ↓
 EducationalKnowledgeUnit[]
 
-Design principles
------------------
-1. Deterministic in V1.
-2. No LLM dependency.
-3. No database dependency.
-4. No embedding dependency.
-5. Preserve document hierarchy.
-6. Preserve source provenance.
-7. Group semantically related elements.
-8. Keep learning outcomes independent.
-9. Group illustrations with their supporting content.
-10. Keep tables/images attached to the knowledge they support.
+The parser is responsible for:
+- semantic grouping
+- preserving hierarchy
+- attaching authoritative document metadata
+- constructing ChunkMetadata
+
+It does NOT:
+- call an LLM
+- access databases
+- generate embeddings
+- upload data
 """
 
 from __future__ import annotations
@@ -36,13 +35,14 @@ from uuid import uuid4
 from app.ingestion.models import (
     ChunkMetadata,
     DifficultyLevel,
+    DocumentLevel,
+    DocumentMetadata,
     EducationalElement,
     EducationalKnowledgeUnit,
     EducationalType,
     EmbeddingStrategy,
     ImageMetadata,
     TableMetadata,
-    DocumentLevel,
     TeachingPriority,
 )
 
@@ -51,17 +51,9 @@ class EducationalParser:
     """
     Convert classified educational elements into
     EducationalKnowledgeUnit objects.
-
-    The parser is intentionally deterministic.
-
-    Input:
-        list[EducationalElement]
-
-    Output:
-        list[EducationalKnowledgeUnit]
     """
 
-    PARSER_VERSION = "parser-v1"
+    PARSER_VERSION = "parser-v2"
 
     # --------------------------------------------------------
     # Types that should always remain independent
@@ -109,13 +101,15 @@ class EducationalParser:
         """
         Initialize the parser.
 
-        default_level and default_paper are temporary fallbacks.
+        Defaults are retained for backwards compatibility with
+        parser unit tests and isolated parser usage.
 
-        The Metadata Builder will later enrich these values using
-        the authoritative document metadata.
+        Production ingestion should always provide DocumentMetadata
+        to parse().
         """
 
         self.default_level = default_level
+
         self.default_paper = default_paper
 
     # ========================================================
@@ -125,6 +119,7 @@ class EducationalParser:
     def parse(
         self,
         elements: list[EducationalElement],
+        document_metadata: DocumentMetadata | None = None,
     ) -> list[EducationalKnowledgeUnit]:
         """
         Convert classified educational elements into EKUs.
@@ -132,36 +127,46 @@ class EducationalParser:
         Parameters
         ----------
         elements:
-            Classified educational elements produced by classifier.py.
+            Classified educational elements.
 
-        Returns
-        -------
-        list[EducationalKnowledgeUnit]
-            Semantically grouped educational knowledge units.
+        document_metadata:
+            Authoritative metadata describing the source document.
+
+            Production ingestion should always provide this.
         """
 
         if not elements:
             return []
 
-        knowledge_units: list[EducationalKnowledgeUnit] = []
+        knowledge_units: list[
+            EducationalKnowledgeUnit
+        ] = []
 
-        current_elements: list[EducationalElement] = []
+        current_elements: list[
+            EducationalElement
+        ] = []
 
         for element in elements:
+
             # ------------------------------------------------
             # Independent educational content
             # ------------------------------------------------
 
-            if element.educational_type in self.INDEPENDENT_TYPES:
+            if (
+                element.educational_type
+                in self.INDEPENDENT_TYPES
+            ):
                 self._flush_current(
                     current_elements=current_elements,
                     output=knowledge_units,
+                    document_metadata=document_metadata,
                 )
 
                 current_elements = []
 
                 eku = self._create_eku(
-                    [element]
+                    [element],
+                    document_metadata=document_metadata,
                 )
 
                 knowledge_units.append(eku)
@@ -172,10 +177,14 @@ class EducationalParser:
             # Illustration starts an example group
             # ------------------------------------------------
 
-            if element.educational_type == EducationalType.ILLUSTRATION:
+            if (
+                element.educational_type
+                == EducationalType.ILLUSTRATION
+            ):
                 self._flush_current(
                     current_elements=current_elements,
                     output=knowledge_units,
+                    document_metadata=document_metadata,
                 )
 
                 current_elements = [element]
@@ -186,12 +195,19 @@ class EducationalParser:
             # Table / diagram / flowchart
             # ------------------------------------------------
 
-            if element.educational_type in self.ATTACHABLE_TYPES:
+            if (
+                element.educational_type
+                in self.ATTACHABLE_TYPES
+            ):
                 if current_elements:
                     current_elements.append(element)
+
                 else:
-                    # Standalone visual content.
-                    eku = self._create_eku([element])
+                    eku = self._create_eku(
+                        [element],
+                        document_metadata=document_metadata,
+                    )
+
                     knowledge_units.append(eku)
 
                 continue
@@ -208,16 +224,20 @@ class EducationalParser:
             # Example mode
             # ------------------------------------------------
 
-            if self._is_example_group(current_elements):
+            if self._is_example_group(
+                current_elements
+            ):
                 if self._belongs_to_same_context(
                     current_elements[-1],
                     element,
                 ):
                     current_elements.append(element)
+
                 else:
                     self._flush_current(
                         current_elements=current_elements,
                         output=knowledge_units,
+                        document_metadata=document_metadata,
                     )
 
                     current_elements = [element]
@@ -233,10 +253,12 @@ class EducationalParser:
                 element,
             ):
                 current_elements.append(element)
+
             else:
                 self._flush_current(
                     current_elements=current_elements,
                     output=knowledge_units,
+                    document_metadata=document_metadata,
                 )
 
                 current_elements = [element]
@@ -248,6 +270,7 @@ class EducationalParser:
         self._flush_current(
             current_elements=current_elements,
             output=knowledge_units,
+            document_metadata=document_metadata,
         )
 
         return knowledge_units
@@ -266,26 +289,23 @@ class EducationalParser:
         should belong to the same EKU.
         """
 
-        # Different hierarchy usually means a semantic boundary.
         if previous.hierarchy_path != current.hierarchy_path:
             return False
 
-        # Tables/visuals are handled separately.
         if current.educational_type in self.ATTACHABLE_TYPES:
             return True
 
         if previous.educational_type in self.ATTACHABLE_TYPES:
             return True
 
-        # Same explanatory family can safely be grouped.
         if (
-            previous.educational_type in self.EXPLANATORY_TYPES
-            and current.educational_type in self.EXPLANATORY_TYPES
+            previous.educational_type
+            in self.EXPLANATORY_TYPES
+            and current.educational_type
+            in self.EXPLANATORY_TYPES
         ):
             return True
 
-        # A concept following a formula/definition/etc. can
-        # still belong to the same educational idea.
         if self._is_supporting_content(
             previous,
             current,
@@ -340,18 +360,17 @@ class EducationalParser:
         }
 
         return (
-            previous.educational_type in valid_previous
-            and current.educational_type in valid_current
+            previous.educational_type
+            in valid_previous
+            and current.educational_type
+            in valid_current
         )
 
     def _is_example_group(
         self,
         elements: list[EducationalElement],
     ) -> bool:
-        """
-        Return True when the current buffer represents
-        an illustration/example.
-        """
+        """Return True when the current buffer is an example."""
 
         return any(
             element.educational_type
@@ -368,15 +387,17 @@ class EducationalParser:
         *,
         current_elements: list[EducationalElement],
         output: list[EducationalKnowledgeUnit],
+        document_metadata: DocumentMetadata | None,
     ) -> None:
-        """
-        Convert the current element buffer into an EKU.
-        """
+        """Convert the current element buffer into an EKU."""
 
         if not current_elements:
             return
 
-        eku = self._create_eku(current_elements)
+        eku = self._create_eku(
+            current_elements,
+            document_metadata=document_metadata,
+        )
 
         output.append(eku)
 
@@ -389,10 +410,9 @@ class EducationalParser:
     def _create_eku(
         self,
         elements: list[EducationalElement],
+        document_metadata: DocumentMetadata | None,
     ) -> EducationalKnowledgeUnit:
-        """
-        Create one EKU from one or more educational elements.
-        """
+        """Create one EKU from one or more educational elements."""
 
         if not elements:
             raise ValueError(
@@ -403,7 +423,9 @@ class EducationalParser:
             elements
         )
 
-        content = self._combine_content(elements)
+        content = self._combine_content(
+            elements
+        )
 
         title = self._build_title(
             elements,
@@ -444,6 +466,7 @@ class EducationalParser:
             page_end=page_end,
             tables=tables,
             images=images,
+            document_metadata=document_metadata,
         )
 
         return EducationalKnowledgeUnit(
@@ -466,21 +489,16 @@ class EducationalParser:
         self,
         elements: list[EducationalElement],
     ) -> EducationalType:
-        """
-        Determine the dominant educational type of a group.
-        """
+        """Determine the dominant educational type."""
 
         types = [
             element.educational_type
             for element in elements
         ]
 
-        # Illustration + explanatory content becomes
-        # a worked example.
         if EducationalType.ILLUSTRATION in types:
             return EducationalType.WORKED_EXAMPLE
 
-        # A standalone table remains a table.
         if all(
             element.educational_type
             == EducationalType.TABLE
@@ -488,7 +506,6 @@ class EducationalParser:
         ):
             return EducationalType.TABLE
 
-        # A standalone diagram remains a diagram.
         if all(
             element.educational_type
             == EducationalType.DIAGRAM
@@ -496,7 +513,6 @@ class EducationalParser:
         ):
             return EducationalType.DIAGRAM
 
-        # A standalone flowchart remains a flowchart.
         if all(
             element.educational_type
             == EducationalType.FLOWCHART
@@ -504,11 +520,9 @@ class EducationalParser:
         ):
             return EducationalType.FLOWCHART
 
-        # If all elements have the same type, preserve it.
         if len(set(types)) == 1:
             return types[0]
 
-        # Otherwise select the strongest semantic type.
         priority = [
             EducationalType.DEFINITION,
             EducationalType.PROCEDURE,
@@ -534,14 +548,14 @@ class EducationalParser:
         self,
         elements: list[EducationalElement],
     ) -> str:
-        """
-        Combine element content while preserving reading order.
-        """
+        """Combine element content preserving reading order."""
 
         parts: list[str] = []
 
         for element in elements:
-            text = self._clean_text(element.content)
+            text = self._clean_text(
+                element.content
+            )
 
             if not text:
                 continue
@@ -559,42 +573,45 @@ class EducationalParser:
         elements: list[EducationalElement],
         educational_type: EducationalType,
     ) -> str:
-        """
-        Build a compact title for the EKU.
-
-        For illustrations, preserve the illustration heading.
-        For other content, use the first meaningful sentence.
-        """
+        """Build a compact title for the EKU."""
 
         first_text = self._clean_text(
             elements[0].content
         )
 
-        # Example:
-        # "Example 1" / "Illustration 2"
-        if educational_type == EducationalType.WORKED_EXAMPLE:
+        if (
+            educational_type
+            == EducationalType.WORKED_EXAMPLE
+        ):
             return self._extract_example_title(
                 elements
             )
 
-        # Learning outcomes should preserve their content.
-        if educational_type == EducationalType.LEARNING_OUTCOME:
-            return self._shorten_title(first_text)
+        if (
+            educational_type
+            == EducationalType.LEARNING_OUTCOME
+        ):
+            return self._shorten_title(
+                first_text
+            )
 
-        # Tables often have useful first-line titles.
-        if educational_type == EducationalType.TABLE:
-            return self._shorten_title(first_text)
+        if (
+            educational_type
+            == EducationalType.TABLE
+        ):
+            return self._shorten_title(
+                first_text
+            )
 
-        # Generic title from first meaningful content.
-        return self._shorten_title(first_text)
+        return self._shorten_title(
+            first_text
+        )
 
     def _extract_example_title(
         self,
         elements: list[EducationalElement],
     ) -> str:
-        """
-        Extract the example/illustration title.
-        """
+        """Extract example/illustration title."""
 
         for element in elements:
             text = self._clean_text(
@@ -618,12 +635,7 @@ class EducationalParser:
         self,
         elements: list[EducationalElement],
     ) -> list[str]:
-        """
-        Preserve the hierarchy of the first meaningful element.
-
-        The classifier is responsible for constructing hierarchy.
-        The parser should not attempt to reconstruct it again.
-        """
+        """Preserve hierarchy of the first meaningful element."""
 
         for element in elements:
             if element.hierarchy_path:
@@ -639,17 +651,20 @@ class EducationalParser:
         self,
         elements: list[EducationalElement],
     ) -> list[TableMetadata]:
-        """
-        Extract table metadata from classifier-provided metadata.
-        """
+        """Extract table metadata."""
 
         tables: list[TableMetadata] = []
 
         for element in elements:
-            if element.educational_type != EducationalType.TABLE:
+            if (
+                element.educational_type
+                != EducationalType.TABLE
+            ):
                 continue
 
-            title = element.metadata.get("title")
+            title = element.metadata.get(
+                "title"
+            )
 
             rows = self._safe_int(
                 element.metadata.get("rows")
@@ -677,9 +692,7 @@ class EducationalParser:
         self,
         elements: list[EducationalElement],
     ) -> list[ImageMetadata]:
-        """
-        Extract image/diagram metadata.
-        """
+        """Extract image/diagram metadata."""
 
         images: list[ImageMetadata] = []
 
@@ -716,33 +729,75 @@ class EducationalParser:
         page_end: int,
         tables: list[TableMetadata],
         images: list[ImageMetadata],
+        document_metadata: DocumentMetadata | None,
     ) -> ChunkMetadata:
         """
-        Build metadata required by DocumentChunk.
+        Build complete ChunkMetadata.
 
-        The Metadata Builder will later enrich/normalize
-        authoritative document-level information.
+        Authoritative document identity comes from DocumentMetadata.
+
+        Section hierarchy comes from the classifier's hierarchy_path.
         """
 
         first = elements[0]
 
         raw_metadata = first.metadata
 
-        level = raw_metadata.get(
-            "level",
-            self.default_level,
+        # ----------------------------------------------------
+        # Document identity
+        # ----------------------------------------------------
+
+        if document_metadata is not None:
+            document_id = document_metadata.document_id
+
+            source = document_metadata.source
+
+            edition = document_metadata.edition
+
+            level = document_metadata.level
+
+            paper = document_metadata.paper
+
+        else:
+            document_id = raw_metadata.get(
+                "document_id",
+                "unknown",
+            )
+
+            source = raw_metadata.get(
+                "source",
+                "unknown",
+            )
+
+            edition = raw_metadata.get(
+                "edition",
+                "unknown",
+            )
+
+            level = self._parse_level(
+                raw_metadata.get(
+                    "level",
+                    self.default_level,
+                )
+            )
+
+            paper = raw_metadata.get(
+                "paper",
+                self.default_paper,
+            )
+
+        # ----------------------------------------------------
+        # Hierarchy
+        # ----------------------------------------------------
+
+        hierarchy = self._extract_hierarchy_metadata(
+            elements=elements,
+            document_metadata=document_metadata,
         )
 
-        paper = raw_metadata.get(
-            "paper",
-            self.default_paper,
-        )
-
-        module = raw_metadata.get("module")
-        chapter = raw_metadata.get("chapter")
-        unit = raw_metadata.get("unit")
-        topic = raw_metadata.get("topic")
-        subtopic = raw_metadata.get("subtopic")
+        # ----------------------------------------------------
+        # Educational metadata
+        # ----------------------------------------------------
 
         difficulty = self._parse_enum(
             DifficultyLevel,
@@ -761,6 +816,10 @@ class EducationalParser:
             raw_metadata.get("embedding_strategy"),
             EmbeddingStrategy.FULL,
         )
+
+        # ----------------------------------------------------
+        # Structural flags
+        # ----------------------------------------------------
 
         has_formula = any(
             element.educational_type
@@ -782,13 +841,16 @@ class EducationalParser:
         has_table = bool(tables)
 
         return ChunkMetadata(
-            level=self._parse_level(level),
+            document_id=document_id,
+            source=source,
+            edition=edition,
+            level=level,
             paper=paper,
-            module=module,
-            chapter=chapter,
-            unit=unit,
-            topic=topic,
-            subtopic=subtopic,
+            module=hierarchy["module"],
+            chapter=hierarchy["chapter"],
+            unit=hierarchy["unit"],
+            topic=hierarchy["topic"],
+            subtopic=hierarchy["subtopic"],
             educational_type=educational_type,
             difficulty=difficulty,
             teaching_priority=teaching_priority,
@@ -803,18 +865,152 @@ class EducationalParser:
         )
 
     # ========================================================
+    # HIERARCHY EXTRACTION
+    # ========================================================
+
+    def _extract_hierarchy_metadata(
+        self,
+        *,
+        elements: list[EducationalElement],
+        document_metadata: DocumentMetadata | None,
+    ) -> dict[str, str | None]:
+        """
+        Convert classifier hierarchy_path into structured fields.
+
+        Expected examples:
+
+            Chapter 1
+            Unit 1 - Meaning and Scope of Accounting
+            1.1 Introduction
+            1.1.1 Meaning
+
+        The parser never invents a value.
+
+        If a hierarchy level cannot be confidently identified,
+        it remains None.
+        """
+
+        result = {
+            "module": None,
+            "chapter": None,
+            "unit": None,
+            "topic": None,
+            "subtopic": None,
+        }
+
+        # ----------------------------------------------------
+        # Module
+        # ----------------------------------------------------
+
+        if document_metadata is not None:
+            # Module is intentionally not fabricated from the
+            # classifier hierarchy because the current classifier
+            # does not expose module as a reliable path value.
+            #
+            # Pipeline integration may inject module into the
+            # EducationalElement metadata when the source path
+            # explicitly provides it.
+            pass
+
+        # ----------------------------------------------------
+        # Read classifier hierarchy
+        # ----------------------------------------------------
+
+        path: list[str] = []
+
+        for element in elements:
+            if element.hierarchy_path:
+                path = list(element.hierarchy_path)
+                break
+
+        for value in path:
+            normalized = value.strip()
+
+            if not normalized:
+                continue
+
+            # -----------------------------------------------
+            # Chapter
+            # -----------------------------------------------
+
+            if re.match(
+                r"^chapter\b",
+                normalized,
+                flags=re.IGNORECASE,
+            ):
+                result["chapter"] = normalized
+                continue
+
+            # -----------------------------------------------
+            # Unit
+            # -----------------------------------------------
+
+            if re.match(
+                r"^unit\b",
+                normalized,
+                flags=re.IGNORECASE,
+            ):
+                result["unit"] = normalized
+                continue
+
+            # -----------------------------------------------
+            # Numbered topic/subtopic
+            # -----------------------------------------------
+
+            match = re.match(
+                r"^(\d+(?:\.\d+)+)\s+(.+)$",
+                normalized,
+            )
+
+            if match:
+                section_number = match.group(1)
+                section_value = normalized
+
+                depth = section_number.count(".")
+
+                if depth == 1:
+                    result["topic"] = section_value
+
+                elif depth >= 2:
+                    result["subtopic"] = section_value
+
+        # ----------------------------------------------------
+        # Explicit metadata has priority
+        # ----------------------------------------------------
+
+        first = elements[0]
+
+        explicit = first.metadata
+
+        for field in (
+            "module",
+            "chapter",
+            "unit",
+            "topic",
+            "subtopic",
+        ):
+            value = explicit.get(field)
+
+            if value:
+                result[field] = value
+
+        return result
+
+    # ========================================================
     # ENUM HELPERS
     # ========================================================
 
     @staticmethod
     def _parse_level(
-        value: str,) -> DocumentLevel:
-        """
-        Safely convert a string to DocumentLevel.
-        """
+        value: str,
+    ) -> DocumentLevel:
+        """Safely convert string to DocumentLevel."""
 
         try:
-            return DocumentLevel(value.lower())
+            return DocumentLevel(
+                value.lower()
+            )
+
         except ValueError:
             return DocumentLevel.FOUNDATION
 
@@ -824,15 +1020,16 @@ class EducationalParser:
         value: str | None,
         default,
     ):
-        """
-        Safely convert string values to Enum members.
-        """
+        """Safely convert string values to Enum members."""
 
         if not value:
             return default
 
         try:
-            return enum_class(value.lower())
+            return enum_class(
+                value.lower()
+            )
+
         except ValueError:
             return default
 
@@ -844,9 +1041,7 @@ class EducationalParser:
     def _clean_text(
         text: str,
     ) -> str:
-        """
-        Normalize whitespace without changing meaning.
-        """
+        """Normalize whitespace without changing meaning."""
 
         text = text.strip()
 
@@ -869,16 +1064,16 @@ class EducationalParser:
         text: str,
         max_length: int = 120,
     ) -> str:
-        """
-        Create a compact title from content.
-        """
+        """Create a compact title from content."""
 
         text = text.strip()
 
         if len(text) <= max_length:
             return text
 
-        shortened = text[:max_length].rsplit(
+        shortened = text[
+            :max_length
+        ].rsplit(
             " ",
             1,
         )[0]
@@ -889,16 +1084,21 @@ class EducationalParser:
     def _safe_int(
         value: str | None,
     ) -> int:
-        """
-        Safely parse integer metadata.
-        """
+        """Safely parse integer metadata."""
 
         if value is None:
             return 0
 
         try:
-            return max(0, int(value))
-        except (TypeError, ValueError):
+            return max(
+                0,
+                int(value),
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
             return 0
 
     # ========================================================
@@ -909,6 +1109,8 @@ class EducationalParser:
     def _generate_eku_id() -> str:
         """
         Generate a globally unique EKU identifier.
+
+        Chunk IDs remain deterministic in the chunker.
         """
 
         return f"eku-{uuid4()}"
